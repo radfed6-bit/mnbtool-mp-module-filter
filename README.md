@@ -2,7 +2,7 @@
 
 > **[Русская версия (README.ru.md)](README.ru.md)** | **[Upstream Bug Report (BUG_REPORT.md)](BUG_REPORT.md)** | **[Original Authors & Credits (CREDITS.md)](CREDITS.md)**
 
-Clean-room native mod (official ModFramework SDK, ARMv7 + ARM64) restoring the missing **"Compatible with module"** filter checkbox in **Mount & Blade: Warband** multiplayer under **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), and fixing the "0 servers" problem for PC 1.174 multiplayer (v1.1.1), accompanied by an independent technical bug report.
+Clean-room native mod (official ModFramework SDK, ARMv7 + ARM64) restoring the missing **"Compatible with module"** filter checkbox in **Mount & Blade: Warband** multiplayer under **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), and fixing the "0 servers" problem for PC 1.174 multiplayer (v1.1.2), accompanied by an independent technical bug report.
 
 > **Clean-Room & Non-Redistribution Notice**: This repository contains **only original C++17 source code, build scripts, CI workflows, and technical documentation** (MIT licensed). It contains **no** smali diffs, **no** binary patchers, **no** M&BTool APKs or `.so` libraries, and **no** Mount & Blade: Warband assets. All credit for M&BTool 4.3 belongs to its original author and contributors — see below and [CREDITS.md](CREDITS.md).
 
@@ -36,17 +36,17 @@ Setting **Server address** = `https://warbandmain.taleworlds.com/`, **Host versi
 3. **Default `http://` URL is black-holed** — with the built-in default `http://warbandmain.taleworlds.com/`, `builtin.multiplayer-master-server-fix` answers `type=list` with an empty string (HTTP success, 0 servers). An explicit `https://` URL avoids this, but only fixes this one layer.
 4. `Internet (Android Only)` sends `gametype=androidonly`, which TaleWorlds answers with 0 bytes; plain *Internet* sends `gametype=android` (~156 servers) instead of the full PC list (`gametype=warband`, ~228 servers).
 
-### Fix: `mp-module-filter.zip` v1.1.1 (no APK patching, no re-signing)
+### Fix: `mp-module-filter.zip` v1.1.2 (no APK patching, no re-signing)
 
-The v1.1.1 mod (built with the official `remixer-dec/MNBTool/modframework` SDK for both `arm64` and `armv7`) fixes all of this in one external mod:
+The v1.1.2 mod (built with the official `remixer-dec/MNBTool/modframework` SDK for both `arm64` and `armv7`) fixes all of this in one external mod:
 
-- Rewrites `warbandmain.taleworlds.com/handlerservers.ashx?type=list` requests to `https://warbandmain.taleworlds.com/handlerservers.ashx?gametype=warband&type=list` (swapped query order bypasses `master-server-fix`'s `?type=` blackhole cleanly even with only default-on *LAN Multiplayer Fix*) (hook on `Request::SendHTTP`, `0x001d2718`, `CHAIN`) so they go through M&BTool's own `ModDevice.httpsGet()`; `chkserialandroid` and non-TaleWorlds hosts are left untouched.
+- Rewrites `warbandmain.taleworlds.com/handlerservers.ashx?type=list` requests to `https://warbandmain.taleworlds.com/handlerservers.ashx?gametype=warband&type=list` (swapped query order bypasses `master-server-fix`'s `?type=` blackhole cleanly even with only default-on *LAN Multiplayer Fix*) (FIFO-head hook on `Network_manager::send_http_request`, `0x001487ec`, `CHAIN`, running before `builtin.multiplayer-master-server-fix` on `0x001d2718`) so they go through M&BTool's own `ModDevice.httpsGet()`; `chkserialandroid` and non-TaleWorlds hosts are left untouched.
 - Normalises PC `1170` servers around the stock `apply_filter` (hook `0x0013ea98`) so PC 1.174 servers are no longer silently hidden.
 - Restores the missing **"Compatible with module"** checkbox (unchecked = show all modules, checked = only the current module).
 
 Install: M&BTool -> **Engine mods** -> **Add** -> **From device (.zip)** -> pick `mp-module-filter.zip`, enable it, restart the game. Because it is an unreviewed external mod, M&BTool treats multiplayer as *untrusted-mods* until the author bundles it (see below).
 
-> **Status note**: v1.0.0 failed on real devices with `mbtool.mp-module-filter: mod_start returned -4 (not found)` (overlapping `original`/`previous_core` slots rejected by `libmodlauncher.so`, error masked as `-4`). v1.1.1 is rewritten against the official SDK; please report real-device results.
+> **Status note**: v1.0.0 failed on real devices with `mbtool.mp-module-filter: mod_start returned -4 (not found)` (overlapping `original`/`previous_core` slots rejected by `libmodlauncher.so`, error masked as `-4`). v1.1.2 is rewritten against the official SDK; please report real-device results.
 
 ---
 
@@ -81,7 +81,7 @@ Install: M&BTool -> **Engine mods** -> **Add** -> **From device (.zip)** -> pick
 
 ---
 
-## Native Mod: `native/mp-module-filter/` (v1.1.1)
+## Native Mod: `native/mp-module-filter/` (v1.1.2)
 
 Clean-room C++17 mod written against the official `remixer-dec/MNBTool/modframework` SDK (`mod_api.h`, `build-mod.sh`, automatic ARM64 bindings via `generate-bindings.py`). It restores `is_version_compatible_checkbox` (`ui_is_version_compatible`) at PC Warband's exact coordinates (`x=0.03, y=0.046`), filters server rows case-insensitively against the active module (respecting the master *"Server filter"* checkbox and chaining cleanly with `builtin.custom-server`), and carries the multiplayer server-list fixes described above.
 

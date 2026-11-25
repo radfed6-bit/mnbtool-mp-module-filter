@@ -31,7 +31,7 @@
 ### 1. [Critical] `builtin.multiplayer-master-server-fix` Drops `warbandmain.taleworlds.com` Server List Queries
 - **Symptom**: Selecting **Internet** in Multiplayer with the default TaleWorlds master server yields **0 servers**.
 - **Root Cause**:
-  - `builtin.multiplayer-master-server-fix` hooks guest `Request::SendHTTP` (`0x001d2718`). `builtin.custom-server` chains on top of it.
+  - `builtin.multiplayer-master-server-fix` hooks guest `Request::SendHTTP` (`0x001d2718`) first in `MF_HOOK_CHAIN` (strictly FIFO in `libmodlauncher.so`), and never invokes `previous` on TaleWorlds URLs — so later chain links (`builtin.custom-server` or external mods on `0x001d2718`) never run for `warbandmain.taleworlds.com/handlerservers.ashx?type=`.
   - When `builtin.custom-server` has `< 2` master servers and the URL uses `http://` (the built-in default is `http://warbandmain.taleworlds.com/`), it delegates to `master_fix`.
   - Inside `master_fix` (`0x019950a4`):
     1. Non-`warbandmain.taleworlds.com/handlerservers.ashx?type=` URLs branch to `0x01995130` (Java `ModDevice.httpsGet()`).
@@ -86,7 +86,7 @@
   - TaleWorlds compiled this checkbox out of the Tegra binary (`libMBExpMobile.so`) and replaced it with hardcoded `module_name != "Native"` (`0x0013eaec`). Once `builtin.custom-server` patched out `0x0013eaec` to support 3rd-party modules, users lost the ability to filter servers by their active module.
 - **Recommended Upstream Fix**:
   - Bundle [`native/mp-module-filter/`](native/mp-module-filter/) (clean-room C++17 mod built with the official `remixer-dec/MNBTool/modframework` SDK) under `assets/mods/mp-module-filter/` (automatically trusted for multiplayer via `AssetManager.list("mods")` -> `InstalledMod.bundled = true`) or integrate it into `builtin.custom-server`.
-  - Note: v1.0.0 of this mod failed on real devices with `mod_start returned -4 (not found)`. Cause: it passed the same slot for `mf_function_hook_v1.original` and `mf_game_hook_adapter_v1.previous_core`, which `libmodlauncher.so` rejects (overlapping slots), then masked the error as `-4`; it also used non-SDK helpers (`get_setting_string` instead of `get_launcher_config`, `resolve_game_address(..., 0)` instead of `MF_MEMORY_READ`). v1.1.0 is rewritten against the official SDK and returns real `mf_result_v1` codes.
+  - Note: v1.0.0 of this mod failed on real devices with `mod_start returned -4 (not found)`. Cause: it passed the same slot for `mf_function_hook_v1.original` and `mf_game_hook_adapter_v1.previous_core`, which `libmodlauncher.so` rejects (overlapping slots), then masked the error as `-4`; it also used non-SDK helpers (`get_setting_string` instead of `get_launcher_config`, `resolve_game_address(..., 0)` instead of `MF_MEMORY_READ`). v1.1.2 is rewritten against the official SDK, returns real `mf_result_v1` codes, and hooks `Network_manager::send_http_request` (`0x001487ec`, FIFO-head before `builtin.multiplayer-master-server-fix` on `0x001d2718`) so TaleWorlds server-list queries route cleanly to `ModDevice.httpsGet()`.
   - Update `assets/localization-stock/patch/languages/en/ui.csv` line 742 from `ui_is_version_compatible|Android games only` to `ui_is_version_compatible|Compatible with module` (`ru/ui.csv` line 742 already reads `Совместимость модуля и версии`).
 
 ### 6. [Critical] Total M&BTool UI Failure on Android 7.0–8.1 (API 24–27)

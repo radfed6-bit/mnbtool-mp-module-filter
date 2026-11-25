@@ -1,10 +1,13 @@
 // Restores multiplayer server discovery on PC Warband v1.174 and the missing
 // "Compatible with module" checkbox in Mount & Blade: Warband's multiplayer
 // server browser (Multiplayer_client_window):
-//   1. Rewrites TaleWorlds master-server list queries (Request::SendHTTP) to
-//      HTTPS + gametype=warband so builtin.custom-server fetches the full PC
-//      server list via ModDevice.httpsGet instead of falling through to
-//      builtin.multiplayer-master-server-fix's blackhole.
+//   1. Hooks Network_manager::send_http_request (0x1487ec) — which runs BEFORE
+//      Request::SendHTTP (0x1d2718) and therefore ahead of
+//      builtin.multiplayer-master-server-fix's FIFO chain head — to rewrite
+//      TaleWorlds master-server list queries to HTTPS + ?gametype=warband&type=list
+//      so builtin.multiplayer-master-server-fix (0x1995150) / builtin.custom-server
+//      fetches the full PC server list via ModDevice.httpsGet instead of
+//      blackholing it.
 //   2. Temporarily normalizes PC 1.170-1.174 server rows to 1157 across
 //      apply_filter() when CustomServer booted in 1157 (due to startup load
 //      order with ResourceOverrides or non-Native modules), restoring the real
@@ -33,7 +36,7 @@ constexpr uintptr_t kMpWinCheck          = 0x122c38; // Multiplayer_client_windo
 constexpr uintptr_t kMpWinDeactivate     = 0x12f040; // Multiplayer_client_window::deactivate()
 constexpr uintptr_t kMpWinActivate       = 0x12f06c; // Multiplayer_client_window::activate()
 constexpr uintptr_t kMpWinApplyFilterRow = 0x13ea98; // Multiplayer_client_window::apply_filter(rglTable_row*)
-constexpr uintptr_t kSendHttp            = 0x1d2718; // Request::SendHTTP(const rglString*, const void*, int32_t, rglString*, uint32_t)
+constexpr uintptr_t kSendHttpRequest     = 0x1487ec; // Network_manager::send_http_request(const rglString&) (sret r0, this r1, url r2)
 
 // Game data global: rglString selected_module_name (size 0x90)
 constexpr uintptr_t kSelectedModuleName = 0x2785884;
@@ -87,8 +90,8 @@ constexpr const char* kWidgetLabel = "ui_is_version_compatible";
 using ActivateFn       = void (*)(void*);
 using DeactivateFn     = void (*)(void*);
 using CheckFn          = void (*)(void*, float);
-using ApplyFilterRowFn = int (*)(void*, void*);
-using SendHttpFn       = int (*)(const void*, const void*, int, void*, unsigned int);
+using ApplyFilterRowFn  = int (*)(void*, void*);
+using SendHttpRequestFn = void (*)(void*, unsigned int, const void*);
 
 // Resolved game function prototypes
 using CreateCheckBoxFn = void* (*)(void*, const void*, const void*, const float*, const float*, const float*);
@@ -107,8 +110,8 @@ const mf_mod_context_v1* context = nullptr;
 ActivateFn       previous_activate     = nullptr;
 DeactivateFn     previous_deactivate   = nullptr;
 CheckFn          previous_check        = nullptr;
-ApplyFilterRowFn previous_apply_filter = nullptr;
-SendHttpFn       previous_send_http    = nullptr;
+ApplyFilterRowFn  previous_apply_filter      = nullptr;
+SendHttpRequestFn previous_send_http_request = nullptr;
 
 CreateCheckBoxFn fn_create_checkbox = nullptr;
 RglStringCtorFn  fn_rglstr_ctor     = nullptr;
@@ -383,14 +386,16 @@ int replacement_apply_filter(void* win, void* row) {
     return hide;
 }
 
-int replacement_send_http(const void* url, const void* post_data, int post_size, void* response, unsigned int flag) {
+void replacement_send_http_request(void* out_response, unsigned int net_mgr, const void* url) {
     if (!https_transport_available || !url || !fn_rglstr_charp || !fn_rglstr_ctor || !fn_rglstr_dtor) {
-        return previous_send_http(url, post_data, post_size, response, flag);
+        previous_send_http_request(out_response, net_mgr, url);
+        return;
     }
 
     const char* raw_url = fn_rglstr_charp(url);
     if (!should_rewrite_master_list_url(raw_url)) {
-        return previous_send_http(url, post_data, post_size, response, flag);
+        previous_send_http_request(out_response, net_mgr, url);
+        return;
     }
 
     // Allocate the rewritten rglString and C-string in game-addressable heap memory.
@@ -399,22 +404,22 @@ int replacement_send_http(const void* url, const void* post_data, int post_size,
     if (!rewritten_url || !rewritten_c) {
         if (rewritten_c) free(rewritten_c);
         if (rewritten_url) free(rewritten_url);
-        return previous_send_http(url, post_data, post_size, response, flag);
+        previous_send_http_request(out_response, net_mgr, url);
+        return;
     }
 
     fn_rglstr_ctor(rewritten_url, rewritten_c);
-    const int rc = previous_send_http(rewritten_url, post_data, post_size, response, flag);
+    previous_send_http_request(out_response, net_mgr, rewritten_url);
     if (api && api->log) {
-        const char* body = response ? fn_rglstr_charp(response) : nullptr;
+        const char* body = out_response ? fn_rglstr_charp(out_response) : nullptr;
+        const bool ok = body && body[0] != '\0' && ascii_strcasecmp(body, "ERROR") != 0;
         api->log(context, MF_LOG_INFO,
-                 (body && body[0] != '\0')
-                     ? "master-list: fetched HTTPS server list (?gametype=warband&type=list)"
-                     : "master-list: HTTPS server list request returned empty body");
+                 ok ? "master-list: fetched HTTPS server list (?gametype=warband&type=list)"
+                    : "master-list: HTTPS server list request returned empty or ERROR");
     }
     fn_rglstr_dtor(rewritten_url);
     free(rewritten_c);
     free(rewritten_url);
-    return rc;
 }
 } // namespace
 
@@ -503,8 +508,8 @@ MF_MOD_START(mp_module_filter)(const mf_api_v1* mod_api, const mf_mod_context_v1
     }
 
     const mf_function_hook_v1 send_http{
-        sizeof(send_http), MF_HOOK_CHAIN, "mp-master-list-https", kGame, nullptr, kSendHttp,
-        reinterpret_cast<void*>(&replacement_send_http), reinterpret_cast<void**>(&previous_send_http)};
+        sizeof(send_http), MF_HOOK_CHAIN, "mp-master-list-https", kGame, nullptr, kSendHttpRequest,
+        reinterpret_cast<void*>(&replacement_send_http_request), reinterpret_cast<void**>(&previous_send_http_request)};
     result = api->hook_function(context, &send_http);
     if (result != MF_OK) {
         api->log(context, MF_LOG_ERROR, "inactive: hook mp-master-list-https failed");

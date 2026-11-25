@@ -6,7 +6,7 @@
   "author": "community",
   "summary": "Fixes PC v1.174 TaleWorlds server list discovery and restores the missing 'Compatible with module' checkbox.",
   "category": "Multiplayer",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "modAbi": 1,
   "gameBuilds": ["default"],
   "compatibility": {
@@ -76,7 +76,7 @@
       "mechanism": "SHADOWHOOK_UNIQUE",
       "behavior": "CHAIN",
       "target": "libMBExpMobile.so",
-      "offset": "0x1d2718"
+      "offset": "0x1487ec"
     }
   ]
 }

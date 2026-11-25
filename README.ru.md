@@ -2,7 +2,7 @@
 
 > **[English version (README.md)](README.md)** | **[Технический баг-репорт (BUG_REPORT.md)](BUG_REPORT.md)** | **[Авторы и благодарности (CREDITS.md)](CREDITS.md)**
 
-Нативный мод (clean-room C++17, официальный ModFramework SDK, ARMv7 + ARM64), возвращающий недостающий флажок **«Совместимость модуля»** в окно списка серверов мультиплеера **Mount & Blade: Warband** под **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), и исправляющий проблему «0 серверов» для мультиплеера PC 1.174 (v1.1.1), а также независимый технический баг-репорт для оригинального автора.
+Нативный мод (clean-room C++17, официальный ModFramework SDK, ARMv7 + ARM64), возвращающий недостающий флажок **«Совместимость модуля»** в окно списка серверов мультиплеера **Mount & Blade: Warband** под **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), и исправляющий проблему «0 серверов» для мультиплеера PC 1.174 (v1.1.2), а также независимый технический баг-репорт для оригинального автора.
 
 > **Политика clean-room**: В этом репозитории публикуются **только оригинальный исходный код на C++17, сборочные файлы, CI workflow и техническая документация** (лицензия MIT). Здесь **нет** smali-патчей, **нет** бинарных патчеров, **нет** APK/библиотек M&BTool и **нет** ресурсов Mount & Blade: Warband. Все права и благодарности за M&BTool 4.3 принадлежат оригинальному автору и участникам — см. ниже и [CREDITS.md](CREDITS.md).
 
@@ -36,17 +36,17 @@
 3. **URL `http://` по умолчанию «глотается»** — при встроенном адресе `http://warbandmain.taleworlds.com/` `builtin.multiplayer-master-server-fix` отвечает на `type=list` пустой строкой (успех HTTP, 0 серверов). Явный `https://` обходит только этот слой.
 4. `Internet (Android Only)` отправляет `gametype=androidonly` (TaleWorlds отвечает 0 байт), а обычный *Internet* — `gametype=android` (~156 серверов) вместо полного PC-списка (`gametype=warband`, ~228 серверов).
 
-### Решение: `mp-module-filter.zip` v1.1.1 (без патча APK и переподписи)
+### Решение: `mp-module-filter.zip` v1.1.2 (без патча APK и переподписи)
 
-Мод v1.1.1 (собран официальным SDK `remixer-dec/MNBTool/modframework` для `arm64` и `armv7`) исправляет всё это одним внешним модом:
+Мод v1.1.2 (собран официальным SDK `remixer-dec/MNBTool/modframework` для `arm64` и `armv7`) исправляет всё это одним внешним модом:
 
-- Переписывает запросы `warbandmain.taleworlds.com/handlerservers.ashx?type=list` в `https://warbandmain.taleworlds.com/handlerservers.ashx?gametype=warband&type=list` (перестановка параметров обходит блокировку `?type=` в `master-server-fix` даже при одном лишь штатном *LAN Multiplayer Fix*) (хук `Request::SendHTTP`, `0x001d2718`, `CHAIN`), чтобы они шли через штатный `ModDevice.httpsGet()` M&BTool; `chkserialandroid` и сторонние хосты не затрагиваются.
+- Переписывает запросы `warbandmain.taleworlds.com/handlerservers.ashx?type=list` в `https://warbandmain.taleworlds.com/handlerservers.ashx?gametype=warband&type=list` (перестановка параметров обходит блокировку `?type=` в `master-server-fix` даже при одном лишь штатном *LAN Multiplayer Fix*) (FIFO-первый хук `Network_manager::send_http_request`, `0x001487ec`, `CHAIN`, срабатывающий до `builtin.multiplayer-master-server-fix` на `0x001d2718`), чтобы они шли через штатный `ModDevice.httpsGet()` M&BTool; `chkserialandroid` и сторонние хосты не затрагиваются.
 - Нормализует PC-серверы `1170` вокруг штатного `apply_filter` (хук `0x0013ea98`), чтобы серверы PC 1.174 больше не скрывались.
 - Возвращает недостающий флажок **«Совместимость модуля»** (снят — все модули, установлен — только текущий).
 
 Установка: M&BTool -> **Моды движка** -> **Добавить** -> **С устройства (.zip)** -> выберите `mp-module-filter.zip`, включите мод и перезапустите игру. Это непроверенный внешний мод, поэтому M&BTool считает мультиплеер *untrusted-mods*, пока автор не включит его в сборку (см. ниже).
 
-> **Примечание**: v1.0.0 на реальных устройствах падал с `mbtool.mp-module-filter: mod_start returned -4 (not found)` (пересекающиеся слоты `original`/`previous_core`, отклонённые `libmodlauncher.so`, ошибка скрывалась под кодом `-4`). v1.1.1 переписан под официальный SDK; присылайте результаты проверки на реальных устройствах.
+> **Примечание**: v1.0.0 на реальных устройствах падал с `mbtool.mp-module-filter: mod_start returned -4 (not found)` (пересекающиеся слоты `original`/`previous_core`, отклонённые `libmodlauncher.so`, ошибка скрывалась под кодом `-4`). v1.1.2 переписан под официальный SDK; присылайте результаты проверки на реальных устройствах.
 
 ---
 
@@ -81,7 +81,7 @@
 
 ---
 
-## Нативный мод: `native/mp-module-filter/` (v1.1.1)
+## Нативный мод: `native/mp-module-filter/` (v1.1.2)
 
 Clean-room мод на C++17 под официальный SDK `remixer-dec/MNBTool/modframework` (`mod_api.h`, `build-mod.sh`, автоматические ARM64-привязки через `generate-bindings.py`). Он восстанавливает `is_version_compatible_checkbox` (`ui_is_version_compatible`) в штатных координатах ПК-версии (`x=0.03, y=0.046`), фильтрует строки серверов без учёта регистра по текущему модулю (с учётом главного флажка «Фильтр серверов» и совместимостью с `builtin.custom-server`) и содержит описанные выше исправления списка серверов.
 
