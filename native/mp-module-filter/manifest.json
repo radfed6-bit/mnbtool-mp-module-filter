@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "id": "mbtool.mp-module-filter",
+  "name": "Multiplayer Filter by Module",
+  "author": "community",
+  "summary": "Restores the missing 'Compatible with module' checkbox in the multiplayer server browser.",
+  "category": "Multiplayer",
+  "group": "Gameplay Improvements",
+  "version": "1.0.0",
+  "localizations": {
+    "ru": {
+      "name": "Фильтр серверов по модулю",
+      "summary": "Возвращает недостающий флажок «Совместимость модуля» в окне списка серверов мультиплеера."
+    }
+  },
+  "modAbi": 1,
+  "gameBuilds": [
+    "default"
+  ],
+  "settings": {
+    "fields": [
+      {
+        "key": "default_enabled",
+        "type": "BOOL",
+        "label": "Filter by current module by default",
+        "description": "Starts the multiplayer server browser with 'Compatible with module' checked.",
+        "default": true,
+        "localizations": {
+          "en": {
+            "label": "Filter by current module by default",
+            "description": "Starts the multiplayer server browser with 'Compatible with module' checked."
+          },
+          "ru": {
+            "label": "Фильтровать по текущему модулю по умолчанию",
+            "description": "Включает флажок «Совместимость модуля» при открытии списка серверов."
+          }
+        }
+      }
+    ]
+  },
+  "hooks": [
+    {
+      "id": "mp-win-activate",
+      "mechanism": "SHADOWHOOK_UNIQUE",
+      "behavior": "CHAIN",
+      "target": "libMBExpMobile.so",
+      "offset": "0x12f06c"
+    },
+    {
+      "id": "mp-win-deactivate",
+      "mechanism": "SHADOWHOOK_UNIQUE",
+      "behavior": "CHAIN",
+      "target": "libMBExpMobile.so",
+      "offset": "0x12f040"
+    },
+    {
+      "id": "mp-win-check",
+      "mechanism": "SHADOWHOOK_UNIQUE",
+      "behavior": "CHAIN",
+      "target": "libMBExpMobile.so",
+      "offset": "0x122c38"
+    },
+    {
+      "id": "mp-win-apply-filter",
+      "mechanism": "SHADOWHOOK_UNIQUE",
+      "behavior": "CHAIN",
+      "target": "libMBExpMobile.so",
+      "offset": "0x13ea98"
+    }
+  ]
+}

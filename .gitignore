@@ -1,0 +1,38 @@
+# Compiled binaries & Android build artifacts
+*.apk
+*.aab
+*.apks
+*.dex
+*.odex
+*.vdex
+*.so
+*.o
+*.a
+*.jar
+*.class
+*.zip
+*.tar.gz
+*.keystore
+*.jks
+
+# Build & staging directories
+build/
+dist/
+out/
+orig-decoded/
+patched-decoded/
+.gradle/
+.cxx/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~

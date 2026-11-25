@@ -1,0 +1,128 @@
+name: Build & Verify M&BTool 4.3 Module Filter Mod
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-verify:
+    name: Build ARM64 Native Mod & Verify Manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Locate Android NDK (aarch64-linux-android24-clang)
+        id: ndk
+        run: |
+          set -euo pipefail
+          CANDIDATES=()
+          [ -n "${ANDROID_NDK_LATEST_HOME:-}" ] && CANDIDATES+=("$ANDROID_NDK_LATEST_HOME")
+          [ -n "${ANDROID_NDK_HOME:-}" ] && CANDIDATES+=("$ANDROID_NDK_HOME")
+          [ -n "${ANDROID_NDK_ROOT:-}" ] && CANDIDATES+=("$ANDROID_NDK_ROOT")
+          [ -n "${ANDROID_NDK:-}" ] && CANDIDATES+=("$ANDROID_NDK")
+          if [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+            while IFS= read -r d; do CANDIDATES+=("$d"); done < <(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -rV)
+          fi
+          if [ -d "/usr/local/lib/android/sdk/ndk" ]; then
+            while IFS= read -r d; do CANDIDATES+=("$d"); done < <(find "/usr/local/lib/android/sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -rV)
+          fi
+
+          CLANG=""
+          for root in "${CANDIDATES[@]}"; do
+            p="$root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+            if [ -x "$p" ]; then
+              CLANG="$p"
+              echo "Found Android NDK clang: $CLANG"
+              break
+            fi
+          done
+
+          if [ -z "$CLANG" ]; then
+            echo "ERROR: Could not locate aarch64-linux-android24-clang in preinstalled Android NDK!" >&2
+            exit 1
+          fi
+
+          echo "cc=$CLANG" >> "$GITHUB_OUTPUT"
+          "$CLANG" --version | head -2
+
+      - name: Compile native/mp-module-filter & verify symbol whitelist
+        run: |
+          set -euo pipefail
+          make -C native/mp-module-filter clean
+          make -C native/mp-module-filter CC="${{ steps.ndk.outputs.cc }}" all check-whitelist
+          file native/mp-module-filter/build/mod.arm64.o native/mp-module-filter/build/libmp_module_filter.so
+          ls -lh native/mp-module-filter/build/
+
+      - name: Validate manifest.json & clean-room repo hygiene
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, pathlib
+
+          manifest = json.loads(pathlib.Path("native/mp-module-filter/manifest.json").read_text(encoding="utf-8"))
+          assert manifest["schemaVersion"] == 1
+          assert manifest["modAbi"] == 1
+          assert manifest["id"] == "mbtool.mp-module-filter"
+          assert len(manifest["hooks"]) == 4
+          print(f"manifest.json OK: id={manifest['id']} version={manifest['version']} hooks={len(manifest['hooks'])}")
+          EOF
+
+      - name: Package mp-module-filter.zip & generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          rm -rf dist stage
+          mkdir -p dist stage/mp-module-filter
+          cp native/mp-module-filter/manifest.json stage/mp-module-filter/
+          cp native/mp-module-filter/build/mod.arm64.o stage/mp-module-filter/
+          (cd stage && zip -r -X ../dist/mp-module-filter.zip mp-module-filter/)
+          cp native/mp-module-filter/build/mod.arm64.o dist/mod.arm64.o
+          cp native/mp-module-filter/build/libmp_module_filter.so dist/libmp_module_filter.so
+          (cd dist && sha256sum mp-module-filter.zip mod.arm64.o libmp_module_filter.so > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+          unzip -l dist/mp-module-filter.zip
+
+      - name: Upload build artifact (mp-module-filter-arm64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp-module-filter-arm64
+          path: dist/
+          retention-days: 90
+
+  release:
+    name: Create GitHub Release
+    needs: build-and-verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mp-module-filter-arm64
+          path: dist/
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "M&BTool 4.3 Module Filter $TAG" \
+              --generate-notes
+          fi
