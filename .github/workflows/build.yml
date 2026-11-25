@@ -115,14 +115,16 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           ls -lh dist/
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
+          if gh release view "$TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --repo "$GH_REPO" --clobber
           else
             gh release create "$TAG" dist/* \
+              --repo "$GH_REPO" \
               --title "M&BTool 4.3 Module Filter $TAG" \
               --generate-notes
           fi
