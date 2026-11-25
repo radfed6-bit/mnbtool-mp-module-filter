@@ -6,9 +6,15 @@
   "author": "community",
   "summary": "Fixes PC v1.174 TaleWorlds server list discovery and restores the missing 'Compatible with module' checkbox.",
   "category": "Multiplayer",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "modAbi": 1,
   "gameBuilds": ["default"],
+  "compatibility": {
+    "loadAfter": [
+      "builtin.custom-server",
+      "builtin.multiplayer-master-server-fix"
+    ]
+  },
   "localizations": {
     "ru": {
       "name": "Фильтр серверов по модулю и список 1.174",

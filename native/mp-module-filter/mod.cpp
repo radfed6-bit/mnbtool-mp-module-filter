@@ -67,10 +67,15 @@ constexpr int32_t kVersion1170Max       = 1174;
 // Event mask passed by Multiplayer_client_window::check() to checkbox get_event()
 constexpr int32_t kWidgetEventChanged = 0x10000;
 
-// Master server list URL rewrite target (official TaleWorlds HTTPS endpoint)
+// Master server list URL rewrite target (official TaleWorlds HTTPS endpoint).
+// Query order ?gametype=warband&type=list is critical: TaleWorlds' ASP.NET
+// handler accepts parameters in any order (returns full PC server list), while
+// builtin.multiplayer-master-server-fix (0x19950f0) matches the literal
+// substring "warbandmain.taleworlds.com/handlerservers.ashx?type=" to blackhole
+// legacy queries and routes all other URLs directly through ModDevice.httpsGet.
 constexpr const char* kMasterListHttpPrefix  = "http://warbandmain.taleworlds.com/handlerservers.ashx?";
 constexpr const char* kMasterListHttpsPrefix = "https://warbandmain.taleworlds.com/handlerservers.ashx?";
-constexpr const char* kMasterListHttpsUrl    = "https://warbandmain.taleworlds.com/handlerservers.ashx?type=list&gametype=warband";
+constexpr const char* kMasterListHttpsUrl    = "https://warbandmain.taleworlds.com/handlerservers.ashx?gametype=warband&type=list";
 
 // Existing game_variables.txt widget name inside server_filter_panel (y = 0.046)
 // and native ui.csv label key.
@@ -115,10 +120,12 @@ WidgetGetEventFn fn_w_get_event     = nullptr;
 ApplyFilterAllFn fn_mp_apply_all    = nullptr;
 TableUpdateFn    fn_table_update    = nullptr;
 
-const void* selected_module_rglstr = nullptr;
-void*       active_win             = nullptr;
-void*       module_checkbox        = nullptr;
-bool        filter_enabled         = true;
+const void* selected_module_rglstr    = nullptr;
+void*       active_win                = nullptr;
+void*       module_checkbox           = nullptr;
+bool        filter_enabled            = true;
+bool        https_transport_available = false;
+bool        logged_first_filter_row   = false;
 
 template<typename T>
 const T& field(const void* base, size_t offset) {
@@ -183,6 +190,41 @@ bool should_rewrite_master_list_url(const char* url) {
     if (!ascii_contains_ci(query, "type=list")) return false;
     if (ascii_contains_ci(query, "chkserial")) return false;
     return ascii_strcasecmp(url, kMasterListHttpsUrl) != 0;
+}
+
+int ascii_strcasecmp_len(const char* a, size_t a_len, const char* b, size_t b_len) {
+    const size_t n = a_len < b_len ? a_len : b_len;
+    for (size_t i = 0; i < n; ++i) {
+        const int ca = ascii_tolower(static_cast<unsigned char>(a[i]));
+        const int cb = ascii_tolower(static_cast<unsigned char>(b[i]));
+        if (ca != cb) return ca - cb;
+    }
+    if (a_len == b_len) return 0;
+    return a_len < b_len ? -1 : 1;
+}
+
+bool module_names_equal(const char* row_mod, const char* cur_mod) {
+    if (!row_mod || !cur_mod) return false;
+    // Strip optional trailing slashes and leading path components from cur_mod
+    // (e.g. "Modules/Native/" -> "Native").
+    size_t cur_len = strlen(cur_mod);
+    while (cur_len > 0 && (cur_mod[cur_len - 1] == '/' || cur_mod[cur_len - 1] == '\\')) {
+        --cur_len;
+    }
+    const char* cur_base = cur_mod;
+    for (size_t i = 0; i < cur_len; ++i) {
+        if (cur_mod[i] == '/' || cur_mod[i] == '\\') {
+            cur_base = cur_mod + i + 1;
+        }
+    }
+    const size_t base_len = static_cast<size_t>((cur_mod + cur_len) - cur_base);
+
+    size_t row_len = strlen(row_mod);
+    while (row_len > 0 && (row_mod[row_len - 1] == '/' || row_mod[row_len - 1] == '\\')) {
+        --row_len;
+    }
+    if (base_len == 0 || row_len == 0) return false;
+    return ascii_strcasecmp_len(row_mod, row_len, cur_base, base_len) == 0;
 }
 
 const char* current_module_name() {
@@ -297,6 +339,10 @@ int replacement_apply_filter(void* win, void* row) {
                 if (orig_ver >= kVersion1170Min && orig_ver <= kVersion1170Max) {
                     row_ver = kVersion1157;
                     filtered_out = previous_apply_filter(win, row);
+                    if (filtered_out != 0 && orig_ver != kVersion1170Max) {
+                        row_ver = kVersion1170Max;
+                        filtered_out = previous_apply_filter(win, row);
+                    }
                     row_ver = orig_ver;
                 }
             }
@@ -327,11 +373,18 @@ int replacement_apply_filter(void* win, void* row) {
     const char* row_mod = fn_rglstr_charp(mod_cell + kTableCellPayload);
     if (!row_mod || row_mod[0] == '\0') return 1; // hide rows with missing module name
 
-    return ascii_strcasecmp(row_mod, cur_mod) == 0 ? 0 : 1;
+    const int hide = module_names_equal(row_mod, cur_mod) ? 0 : 1;
+    if (!logged_first_filter_row && api && api->log) {
+        logged_first_filter_row = true;
+        api->log(context, MF_LOG_INFO,
+                 hide == 0 ? "apply-filter: first PC server row matched current module (shown)"
+                           : "apply-filter: first PC server row differed from current module (filtered)");
+    }
+    return hide;
 }
 
 int replacement_send_http(const void* url, const void* post_data, int post_size, void* response, unsigned int flag) {
-    if (!url || !fn_rglstr_charp || !fn_rglstr_ctor || !fn_rglstr_dtor) {
+    if (!https_transport_available || !url || !fn_rglstr_charp || !fn_rglstr_ctor || !fn_rglstr_dtor) {
         return previous_send_http(url, post_data, post_size, response, flag);
     }
 
@@ -351,6 +404,13 @@ int replacement_send_http(const void* url, const void* post_data, int post_size,
 
     fn_rglstr_ctor(rewritten_url, rewritten_c);
     const int rc = previous_send_http(rewritten_url, post_data, post_size, response, flag);
+    if (api && api->log) {
+        const char* body = response ? fn_rglstr_charp(response) : nullptr;
+        api->log(context, MF_LOG_INFO,
+                 (body && body[0] != '\0')
+                     ? "master-list: fetched HTTPS server list (?gametype=warband&type=list)"
+                     : "master-list: HTTPS server list request returned empty body");
+    }
     fn_rglstr_dtor(rewritten_url);
     free(rewritten_c);
     free(rewritten_url);
@@ -369,6 +429,21 @@ MF_MOD_START(mp_module_filter)(const mf_api_v1* mod_api, const mf_mod_context_v1
 
     if (MF_API_HAS(api, get_setting_bool) && api->get_setting_bool) {
         filter_enabled = api->get_setting_bool(context, "default_enabled", 1) != 0;
+    }
+
+    const bool has_master_fix =
+        api->is_mod_active && api->is_mod_active(context, "builtin.multiplayer-master-server-fix") != 0;
+    const bool has_custom_server =
+        api->is_mod_active && api->is_mod_active(context, "builtin.custom-server") != 0;
+    https_transport_available = has_master_fix || has_custom_server;
+    if (!has_master_fix) {
+        api->log(context, MF_LOG_WARNING,
+                 "builtin.multiplayer-master-server-fix (LAN Multiplayer Fix) is inactive; "
+                 "multiplayer profile screen will bounce without it");
+    }
+    if (!https_transport_available) {
+        api->log(context, MF_LOG_WARNING,
+                 "no built-in HTTPS bridge active; skipping master-server HTTPS rewrite");
     }
 
     // Optional: falls back to get_launcher_config("game.module.directory") if unavailable.
