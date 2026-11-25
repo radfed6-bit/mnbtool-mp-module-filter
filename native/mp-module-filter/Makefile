@@ -1,53 +1,27 @@
-# Standalone Makefile for Android NDK (GitHub Actions) or aarch64-linux-gnu-gcc
+# Build wrapper around the official M&BTool ModFramework SDK (remixer-dec/MNBTool).
 #
-# Android NDK usage:
-#   make CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
-#
-# Local Linux aarch64 verification:
-#   make CC=aarch64-linux-gnu-gcc
+# Usage:
+#   export ANDROID_NDK_ROOT=/path/to/android-ndk
+#   export MNBTOOL_SDK=/path/to/MNBTool/modframework
+#   make               # builds both ARMv7 and ARM64 objects in build/
+#   make package       # creates build/mp-module-filter.zip (manifest.json at root)
 
-ifeq ($(origin CC),default)
-CC := aarch64-linux-android24-clang
-endif
+MNBTOOL_SDK ?= ../../../MNBTool/modframework
+ANDROID_ABI ?= both
 
-ifneq (,$(findstring clang,$(CC)))
-SAFE_STACK_FLAG ?= -fno-sanitize=safe-stack
-else
-SAFE_STACK_FLAG ?=
-endif
+.PHONY: all package clean
 
-ifneq (,$(findstring android,$(CC)))
-LDLIBS ?= -llog -ldl
-else
-LDLIBS ?= -ldl
-endif
+all:
+	@test -x "$(MNBTOOL_SDK)/build-mod.sh" || { \
+		echo "ERROR: Official M&BTool ModFramework SDK not found at $(MNBTOOL_SDK)." >&2; \
+		echo "Clone https://github.com/remixer-dec/MNBTool and set MNBTOOL_SDK=/path/to/MNBTool/modframework" >&2; \
+		exit 1; \
+	}
+	ANDROID_ABI=$(ANDROID_ABI) "$(MNBTOOL_SDK)/build-mod.sh" . ./build
 
-COMMON_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror
-ETREL_CFLAGS  := $(COMMON_CFLAGS) -fno-PIC -fno-common -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-optimize-sibling-calls $(SAFE_STACK_FLAG)
-SO_CFLAGS     := $(COMMON_CFLAGS) -fPIC
-
-.PHONY: all clean check-whitelist
-
-all: build/mod.arm64.o build/libmp_module_filter.so
-
-build:
-	mkdir -p build
-
-build/mod.arm64.o: mod_etrel.c mf_abi.h | build
-	$(CC) $(ETREL_CFLAGS) -c mod_etrel.c -o $@
-
-build/libmp_module_filter.so: mod_so.c mf_abi.h | build
-	$(CC) $(SO_CFLAGS) -shared mod_so.c -o $@ $(LDLIBS)
-
-# Verify build/mod.arm64.o imports ONLY symbols permitted by libmodlauncher.so
-check-whitelist: build/mod.arm64.o
-	python3 -c 'import subprocess, sys; \
-allowed = {"mf_game_pointer_v1","__safestack_pointer_address","memcmp","memcpy","memmove","memset","strlen","strnlen","strcmp","strncmp","strstr","malloc","calloc","realloc","free","clock_gettime"}; \
-out = subprocess.check_output(["nm", "-u", "build/mod.arm64.o"], text=True); \
-undef = {l.split()[-1] for l in out.splitlines() if l.strip()}; \
-bad = sorted(undef - allowed); \
-print("Undefined symbols:", sorted(undef)); \
-sys.exit(f"DISALLOWED SYMBOLS: {bad}") if bad else print("Whitelist check PASSED")'
+package: all
+	rm -f build/mp-module-filter.zip
+	cd build && zip -r -X mp-module-filter.zip manifest.json mod.arm64.o mod.armv7.o source/
 
 clean:
 	rm -rf build

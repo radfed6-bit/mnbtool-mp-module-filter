@@ -10,6 +10,8 @@
 | # | Severity | Component | Summary |
 |---|---|---|---|
 | **1** | Critical | `builtin.multiplayer-master-server-fix` (`libmodlauncher.so`) | Non-`chkserialandroid` requests to `warbandmain.taleworlds.com/handlerservers.ashx?type=` are dropped with an empty response (`""`) -> **0 servers** |
+| **1b** | Critical | `builtin.custom-server::mod_start()` vs `builtin.resource-overrides::mod_start()` (startup load order) | `CustomServer` checks `ResourceOverrides::g_archive_ready` ~42 ms **before** `ResourceOverrides` runs, so `Start in host version = true` + `Host version = 1.174` **always** silently fails and the game boots in protocol `1157` |
+| **1c** | High | `builtin.custom-server::apply_filter` + stock `apply_filter` (`cmp w20, #0x485`) | While booted in `1157`, every PC `1170` (1.174) server is hidden by the stock filter unless `g_is_native_1157 && g_archive_ready`; true for non-Native modules (e.g. Napoleonic Wars) and, due to 1b, for Native too |
 | **2** | High | `builtin.custom-server` + `library.json` default override | Cached `library.json` `"servers"` silently replaces TaleWorlds default with `http://oreo922.cn` (2 entries, 4–6s latency) |
 | **3** | High | `ModDevice.httpsGet()` | Reads `getErrorStream()` on HTTP `>= 400` and returns HTML error pages as valid `byte[]`; does not follow `http↔https` redirects; sends raw `Dalvik` UA |
 | **4** | Medium | Engine query string (`&gametype=android*`) & protocol default (`1157` vs `1170`) | `&gametype=android` omits ~100 PC servers (`&gametype=androidonly` returns 0 bytes); default `host-version="1.158"` / `start-host-version=false` keeps Native on `1157` when `module.ini` lacks `compatible_multiplayer_version_no` |
@@ -37,6 +39,20 @@
     3. When `chkserialandroid` is absent (such as `type=list&gametype=android`, `type=list`, `type=ping`), the branch at `0x01995118` jumps straight to the epilogue (`0x019951f8`) returning an empty response (`""`) instead of branching to `0x01995130` (`ModDevice.httpsGet()`).
   - Note: By contrast, when the user sets an `https://` URL, `builtin.custom-server` handles it directly without chaining to `master_fix`.
 - **Recommended Upstream Fix**: Route non-`chkserialandroid` `warbandmain.taleworlds.com` requests to the `ModDevice.httpsGet()` path (`0x01995130`) instead of returning an empty string.
+
+### 1b. [Critical] Startup Load-Order Bug: `Start in host version` Never Takes Effect
+- **Symptom**: With `builtin.custom-server` set to `https://warbandmain.taleworlds.com/`, `Host version = 1.174`, `Start in host version = true`, the Internet list still shows **"0 servers and 0 players filtered"** on a real device.
+- **Evidence** (real-device logcat, `Nov 25 00:35:33`, `:game` process):
+  - `00:35:33.246 I/CustomServer: master servers: 1, hosting on http://warbandmain.taleworlds.com/; version 1157`
+  - `00:35:33.288 I/ResourceOverrides: layer files=122 base module=Native stacked=0 archive files=0`
+  - i.e. `builtin.custom-server::mod_start()` runs **~42 ms before** `builtin.resource-overrides::mod_start()`.
+- **Root Cause**: `CustomServer::mod_start()` only switches the process to `1170` (`0x492`, patching the six `0x485` compare sites incl. `0x0013eb18`) when `ResourceOverrides::g_archive_ready` is true (this reflects the Java-side `Z2.b0()` rule: Native module + `start-host-version=true` + `host-version=1.174`, plus the `native-1174` overlay being ready). Because `ResourceOverrides` has not initialised yet, the flag is always `0` at that moment, so the game always starts in `1157`.
+- **Recommended Upstream Fix**: Start `builtin.resource-overrides` before `builtin.custom-server` (add it to `custom-server`'s `requires`/`loadAfter`, or re-evaluate the version switch lazily on first server-list request instead of in `mod_start`).
+
+### 1c. [High] Stock `apply_filter` Hides All `1170` Servers While the Engine Runs `1157`
+- **Root Cause**: `Multiplayer_client_window::apply_filter(rglTable_row*)` (`0x0013ea98`) compares the row's `mb_version_no` with the engine version (`cmp w20, #0x485`). `CustomServer::apply_filter` only spoofs `1170 -> 1157` for rows whose module matches the active module when `g_is_native_1157 == 1 && ResourceOverrides::g_archive_ready == 1`; otherwise it calls the stock filter, which hides every `1170` (PC 1.174) row. `g_is_native_1157` is `0` for any non-Native module (the log shows `selected module directory: Napoleonic Wars`), and `g_archive_ready` is `0` for everyone because of 1b.
+- **Related UI note**: the second list type is `Internet (Android Only)` -> `gametype=androidonly`, which TaleWorlds answers with 0 bytes (0 servers); use plain *Internet*.
+- **Recommended Upstream Fix**: Normalise the version of matching PC rows around the stock filter call regardless of module; do not gate it on `g_archive_ready`.
 
 ### 2. [High] `library.json` Silently Overrides Default TaleWorlds Master Server with `http://oreo922.cn`
 - **Symptom**: Even if Bug #1 is fixed, once the launcher fetches `https://remixer-dec.github.io/MNBTool/library.json`, the default master server silently changes from `http://warbandmain.taleworlds.com/` to `http://oreo922.cn`.
@@ -69,7 +85,8 @@
   - In PC Warband, `Multiplayer_client_window::activate()` creates `is_version_compatible_checkbox` (`ui_is_version_compatible`) inside `server_filter_panel` at `x=0.03, y=0.046` (coordinates still present in `game_variables.txt` lines 1301–1304, leaving a blank gap between *Has players* at `y=0.071` and *No password* at `y=0.021`).
   - TaleWorlds compiled this checkbox out of the Tegra binary (`libMBExpMobile.so`) and replaced it with hardcoded `module_name != "Native"` (`0x0013eaec`). Once `builtin.custom-server` patched out `0x0013eaec` to support 3rd-party modules, users lost the ability to filter servers by their active module.
 - **Recommended Upstream Fix**:
-  - Bundle [`native/mp-module-filter/`](native/mp-module-filter/) (clean-room C11 implementation in this repository) under `assets/mods/mp-module-filter/` (automatically trusted for multiplayer via `AssetManager.list("mods")` -> `InstalledMod.bundled = true`) or integrate it into `builtin.custom-server`.
+  - Bundle [`native/mp-module-filter/`](native/mp-module-filter/) (clean-room C++17 mod built with the official `remixer-dec/MNBTool/modframework` SDK) under `assets/mods/mp-module-filter/` (automatically trusted for multiplayer via `AssetManager.list("mods")` -> `InstalledMod.bundled = true`) or integrate it into `builtin.custom-server`.
+  - Note: v1.0.0 of this mod failed on real devices with `mod_start returned -4 (not found)`. Cause: it passed the same slot for `mf_function_hook_v1.original` and `mf_game_hook_adapter_v1.previous_core`, which `libmodlauncher.so` rejects (overlapping slots), then masked the error as `-4`; it also used non-SDK helpers (`get_setting_string` instead of `get_launcher_config`, `resolve_game_address(..., 0)` instead of `MF_MEMORY_READ`). v1.1.0 is rewritten against the official SDK and returns real `mf_result_v1` codes.
   - Update `assets/localization-stock/patch/languages/en/ui.csv` line 742 from `ui_is_version_compatible|Android games only` to `ui_is_version_compatible|Compatible with module` (`ru/ui.csv` line 742 already reads `Совместимость модуля и версии`).
 
 ### 6. [Critical] Total M&BTool UI Failure on Android 7.0–8.1 (API 24–27)

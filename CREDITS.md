@@ -1,6 +1,6 @@
 # Credits, Attribution & Original Resources
 
-All rights and credit for **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`, `mnb_noobb_v_4_3_armv8.apk`) and **Mount & Blade: Warband** belong strictly to their respective original authors and copyright holders. This repository contains only independent technical analysis, bug reports, and original clean-room C11 hook code.
+All rights and credit for **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`, `mnb_noobb_v_4_3_armv8.apk`) and **Mount & Blade: Warband** belong strictly to their respective original authors and copyright holders. This repository contains only independent technical analysis, bug reports, and original clean-room C++17 mod code built with the official M&BTool ModFramework SDK.
 
 ---
 
@@ -41,3 +41,9 @@ All rights and credit for **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`, `mnb_
   - **Readium Speech** (`github.com/readium/speech/json`, CC0), cross-checked with RT-Voice PRO
 - **AI / Translation Endpoint Defaults in M&BTool 4.3**:
   - OpenAI-compatible API (`https://api.openai.com/v1`), Hugging Face (`https://huggingface.co/`), ModelScope (`https://modelscope.cn/models/`)
+
+---
+
+## Official M&BTool ModFramework SDK (used to build `native/mp-module-filter`)
+
+- **remixer-dec/MNBTool** `modframework/` (`mod_api.h`, `mod_compat.hpp`, `build-mod.sh`, `generate-bindings.py`) — fetched at build time from https://github.com/remixer-dec/MNBTool (pinned to the Release 4.3 commit); it is **not** redistributed in this repository. Docs: https://remixer-dec.github.io/MNBTool/web/ru/modframework-guide/

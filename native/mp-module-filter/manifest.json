@@ -1,22 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "minLauncherVersion": "4.3",
   "id": "mbtool.mp-module-filter",
   "name": "Multiplayer Filter by Module",
   "author": "community",
-  "summary": "Restores the missing 'Compatible with module' checkbox in the multiplayer server browser.",
+  "summary": "Fixes PC v1.174 TaleWorlds server list discovery and restores the missing 'Compatible with module' checkbox.",
   "category": "Multiplayer",
-  "group": "Gameplay Improvements",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "modAbi": 1,
+  "gameBuilds": ["default"],
   "localizations": {
     "ru": {
-      "name": "Фильтр серверов по модулю",
-      "summary": "Возвращает недостающий флажок «Совместимость модуля» в окне списка серверов мультиплеера."
+      "name": "Фильтр серверов по модулю и список 1.174",
+      "summary": "Исправляет получение списка PC-серверов 1.174 и возвращает флажок «Совместимость модуля» в окне списка серверов."
     }
   },
-  "modAbi": 1,
-  "gameBuilds": [
-    "default"
-  ],
   "settings": {
     "fields": [
       {
@@ -66,6 +64,13 @@
       "behavior": "CHAIN",
       "target": "libMBExpMobile.so",
       "offset": "0x13ea98"
+    },
+    {
+      "id": "mp-master-list-https",
+      "mechanism": "SHADOWHOOK_UNIQUE",
+      "behavior": "CHAIN",
+      "target": "libMBExpMobile.so",
+      "offset": "0x1d2718"
     }
   ]
 }

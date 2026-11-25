@@ -11,16 +11,33 @@ on:
 permissions:
   contents: read
 
+env:
+  # Official remixer-dec/MNBTool commit (Release 4.3) providing ModFramework SDK
+  MNBTOOL_REPO: https://github.com/remixer-dec/MNBTool.git
+  MNBTOOL_COMMIT: 2797afa175ae1763635f265fa348798770cb7e1e
+
 jobs:
   build-and-verify:
-    name: Build ARM64 Native Mod & Verify Manifest
+    name: Build ARMv7 + ARM64 Native Mod (Official ModFramework SDK)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate Android NDK (aarch64-linux-android24-clang)
+      - name: Fetch official M&BTool ModFramework SDK (pinned commit)
+        run: |
+          set -euo pipefail
+          rm -rf .mnbtool-sdk
+          git init .mnbtool-sdk
+          git -C .mnbtool-sdk remote add origin "$MNBTOOL_REPO"
+          git -C .mnbtool-sdk config core.sparseCheckout true
+          echo "modframework/" > .mnbtool-sdk/.git/info/sparse-checkout
+          git -C .mnbtool-sdk fetch --depth 1 origin "$MNBTOOL_COMMIT"
+          git -C .mnbtool-sdk checkout FETCH_HEAD
+          ls -la .mnbtool-sdk/modframework/
+
+      - name: Locate Android NDK
         id: ndk
         run: |
           set -euo pipefail
@@ -36,64 +53,68 @@ jobs:
             while IFS= read -r d; do CANDIDATES+=("$d"); done < <(find "/usr/local/lib/android/sdk/ndk" -mindepth 1 -maxdepth 1 -type d | sort -rV)
           fi
 
-          CLANG=""
+          NDK_ROOT=""
           for root in "${CANDIDATES[@]}"; do
-            p="$root/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-            if [ -x "$p" ]; then
-              CLANG="$p"
-              echo "Found Android NDK clang: $CLANG"
+            if [ -x "$root/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" ]; then
+              NDK_ROOT="$root"
+              echo "Found Android NDK: $NDK_ROOT"
               break
             fi
           done
 
-          if [ -z "$CLANG" ]; then
-            echo "ERROR: Could not locate aarch64-linux-android24-clang in preinstalled Android NDK!" >&2
+          if [ -z "$NDK_ROOT" ]; then
+            echo "ERROR: Could not locate preinstalled Android NDK!" >&2
             exit 1
           fi
 
-          echo "cc=$CLANG" >> "$GITHUB_OUTPUT"
-          "$CLANG" --version | head -2
+          echo "ndk_root=$NDK_ROOT" >> "$GITHUB_OUTPUT"
+          "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version | head -2
 
-      - name: Compile native/mp-module-filter & verify symbol whitelist
+      - name: Build ARMv7 + ARM64 objects with official modframework/build-mod.sh
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk_root }}
+          ANDROID_ABI: both
+          CXXFLAGS: -Werror
         run: |
           set -euo pipefail
-          make -C native/mp-module-filter clean
-          make -C native/mp-module-filter CC="${{ steps.ndk.outputs.cc }}" all check-whitelist
-          file native/mp-module-filter/build/mod.arm64.o native/mp-module-filter/build/libmp_module_filter.so
+          rm -rf native/mp-module-filter/build
+          ./.mnbtool-sdk/modframework/build-mod.sh native/mp-module-filter native/mp-module-filter/build
+          file native/mp-module-filter/build/mod.arm64.o native/mp-module-filter/build/mod.armv7.o
           ls -lh native/mp-module-filter/build/
 
-      - name: Validate manifest.json & clean-room repo hygiene
+      - name: Validate manifest.json
         run: |
           set -euo pipefail
           python3 - <<'EOF'
           import json, pathlib
 
-          manifest = json.loads(pathlib.Path("native/mp-module-filter/manifest.json").read_text(encoding="utf-8"))
-          assert manifest["schemaVersion"] == 1
+          manifest = json.loads(pathlib.Path("native/mp-module-filter/build/manifest.json").read_text(encoding="utf-8"))
+          assert manifest["schemaVersion"] == 2
+          assert manifest["minLauncherVersion"] == "4.3"
           assert manifest["modAbi"] == 1
           assert manifest["id"] == "mbtool.mp-module-filter"
-          assert len(manifest["hooks"]) == 4
+          assert manifest["gameBuilds"] == ["default"]
+          assert len(manifest["hooks"]) == 5
           print(f"manifest.json OK: id={manifest['id']} version={manifest['version']} hooks={len(manifest['hooks'])}")
           EOF
 
       - name: Package mp-module-filter.zip & generate SHA256SUMS.txt
         run: |
           set -euo pipefail
-          rm -rf dist stage
-          mkdir -p dist stage/mp-module-filter
-          cp native/mp-module-filter/manifest.json stage/mp-module-filter/
-          cp native/mp-module-filter/build/mod.arm64.o stage/mp-module-filter/
-          (cd stage && zip -r -X ../dist/mp-module-filter.zip mp-module-filter/)
+          rm -rf dist
+          mkdir -p dist
+          # Official M&BTool ZIP format: manifest.json at archive root
+          (cd native/mp-module-filter/build && zip -r -X ../../../dist/mp-module-filter.zip .)
           cp native/mp-module-filter/build/mod.arm64.o dist/mod.arm64.o
-          cp native/mp-module-filter/build/libmp_module_filter.so dist/libmp_module_filter.so
-          (cd dist && sha256sum mp-module-filter.zip mod.arm64.o libmp_module_filter.so > SHA256SUMS.txt)
+          cp native/mp-module-filter/build/mod.armv7.o dist/mod.armv7.o
+          (cd dist && sha256sum mp-module-filter.zip mod.arm64.o mod.armv7.o > SHA256SUMS.txt)
           cat dist/SHA256SUMS.txt
           unzip -l dist/mp-module-filter.zip
 
-      - name: Upload build artifact (mp-module-filter-arm64)
+      - name: Upload build artifact (mp-module-filter)
         uses: actions/upload-artifact@v4
         with:
-          name: mp-module-filter-arm64
+          name: mp-module-filter
           path: dist/
           retention-days: 90
 
@@ -109,7 +130,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: mp-module-filter-arm64
+          name: mp-module-filter
           path: dist/
 
       - name: Create or update GitHub Release

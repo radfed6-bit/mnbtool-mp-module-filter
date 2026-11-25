@@ -2,9 +2,9 @@
 
 > **[English version (README.md)](README.md)** | **[Технический баг-репорт (BUG_REPORT.md)](BUG_REPORT.md)** | **[Авторы и благодарности (CREDITS.md)](CREDITS.md)**
 
-Нативный AArch64-мод (clean-room C11), возвращающий недостающий флажок **«Совместимость модуля»** в окно списка серверов мультиплеера **Mount & Blade: Warband** под **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), а также независимый технический баг-репорт для оригинального автора и рабочее решение для мультиплеера PC 1.174.
+Нативный мод (clean-room C++17, официальный ModFramework SDK, ARMv7 + ARM64), возвращающий недостающий флажок **«Совместимость модуля»** в окно списка серверов мультиплеера **Mount & Blade: Warband** под **M&BTool 4.3** (`com.taleworlds.mbwarband.m1p`), и исправляющий проблему «0 серверов» для мультиплеера PC 1.174 (v1.1.0), а также независимый технический баг-репорт для оригинального автора.
 
-> **Политика clean-room**: В этом репозитории публикуются **только оригинальный исходный код на C11, сборочные файлы, CI workflow и техническая документация** (лицензия MIT). Здесь **нет** smali-патчей, **нет** бинарных патчеров, **нет** APK/библиотек M&BTool и **нет** ресурсов Mount & Blade: Warband. Все права и благодарности за M&BTool 4.3 принадлежат оригинальному автору и участникам — см. ниже и [CREDITS.md](CREDITS.md).
+> **Политика clean-room**: В этом репозитории публикуются **только оригинальный исходный код на C++17, сборочные файлы, CI workflow и техническая документация** (лицензия MIT). Здесь **нет** smali-патчей, **нет** бинарных патчеров, **нет** APK/библиотек M&BTool и **нет** ресурсов Mount & Blade: Warband. Все права и благодарности за M&BTool 4.3 принадлежат оригинальному автору и участникам — см. ниже и [CREDITS.md](CREDITS.md).
 
 ---
 
@@ -22,20 +22,31 @@
 
 ---
 
-## Быстрое решение проблемы «0 серверов» (на официальном немодифицированном APK)
+## Почему одних настроек `https://warbandmain.taleworlds.com/` + `1.174` недостаточно
 
-Чтобы список серверов PC 1.174 заработал **прямо сейчас без переподписи официального APK**:
+Значения **Server address** = `https://warbandmain.taleworlds.com/`, **Host version** = `1.174 (PC)` и **Start in host version** = `true` в `builtin.custom-server` на немодифицированном официальном APK **не решают проблему** (подтверждено на реальном телефоне, logcat `Nov 25 00:35`):
 
-1. Откройте **M&BTool 4.3** -> **Native Mods** -> **Custom Server** (`builtin.custom-server`).
-2. Вручную задайте **Server address** (адрес главного сервера):
+1. **Ошибка порядка запуска** — `builtin.custom-server::mod_start()` выполняется примерно на 42 мс **раньше** `builtin.resource-overrides::mod_start()`:
    ```
-   https://warbandmain.taleworlds.com/
+   00:35:33.246 I/CustomServer:       master servers: 1, hosting on http://warbandmain.taleworlds.com/; version 1157
+   00:35:33.288 I/ResourceOverrides:  layer files=122 base module=Native stacked=0 archive files=0
    ```
-   - **Почему `https://` решает проблему**:
-     - Явно сохранённый адрес перекрывает тихую подмену дефолтного сервера из `library.json` (`http://oreo922.cn`, отдаёт лишь 2 сервера) в `C0031g.c()`.
-     - Использование **`https://`** направляет `type=list` из `builtin.custom-server` напрямую в Java `ModDevice.httpsGet()`, минуя ошибку в `builtin.multiplayer-master-server-fix` (`0x01995118`), из-за которой HTTP-запросы к `warbandmain.taleworlds.com/handlerservers.ashx?type=list*` отбрасываются с пустым ответом (`""`).
-   - **Проверенное поведение**: Живые проверки подтверждают, что `https://warbandmain.taleworlds.com/handlerservers.ashx?type=list&gametype=android` напрямую отдаёт HTTP 200 (~185 серверов; полный PC-список без `&gametype=android` — ~278–288 серверов). При схеме `https://` запросы `chkserialandroid` также идут напрямую на HTTPS TaleWorlds, минуя локальную заглушку `master_fix`.
-3. Выставьте **Host version** = **`1.174 (PC)`** и **Start in host version** = **`true`** (или добавьте `compatible_multiplayer_version_no = 1170` в `/sdcard/mnb/patch/Modules/Native/module.ini`), чтобы клиент использовал протокол PC 1.174 (`1170`).
+   `CustomServer` переключается на протокол `1170` только если `ResourceOverrides::g_archive_ready` установлен, а на этом этапе он всегда `0`. **Поэтому `Start in host version` никогда не срабатывает, и игра всегда стартует в `1157`.**
+2. **Штатный фильтр скрывает все серверы `1170`** — пока движок работает в `1157`, `apply_filter` (`cmp w20, #0x485`) отбрасывает все строки PC 1.174. Для сторонних модулей (например, *Napoleonic Wars*) `CustomServer` вообще не подменяет версию.
+3. **URL `http://` по умолчанию «глотается»** — при встроенном адресе `http://warbandmain.taleworlds.com/` `builtin.multiplayer-master-server-fix` отвечает на `type=list` пустой строкой (успех HTTP, 0 серверов). Явный `https://` обходит только этот слой.
+4. `Internet (Android Only)` отправляет `gametype=androidonly` (TaleWorlds отвечает 0 байт), а обычный *Internet* — `gametype=android` (~156 серверов) вместо полного PC-списка (`gametype=warband`, ~228 серверов).
+
+### Решение: `mp-module-filter.zip` v1.1.0 (без патча APK и переподписи)
+
+Мод v1.1.0 (собран официальным SDK `remixer-dec/MNBTool/modframework` для `arm64` и `armv7`) исправляет всё это одним внешним модом:
+
+- Переписывает запросы `warbandmain.taleworlds.com/handlerservers.ashx?type=list` в `https://...&gametype=warband` (хук `Request::SendHTTP`, `0x001d2718`, `CHAIN`), чтобы они шли через штатный `ModDevice.httpsGet()` M&BTool; `chkserialandroid` и сторонние хосты не затрагиваются.
+- Нормализует PC-серверы `1170` вокруг штатного `apply_filter` (хук `0x0013ea98`), чтобы серверы PC 1.174 больше не скрывались.
+- Возвращает недостающий флажок **«Совместимость модуля»** (снят — все модули, установлен — только текущий).
+
+Установка: M&BTool -> **Моды движка** -> **Добавить** -> **С устройства (.zip)** -> выберите `mp-module-filter.zip`, включите мод и перезапустите игру. Это непроверенный внешний мод, поэтому M&BTool считает мультиплеер *untrusted-mods*, пока автор не включит его в сборку (см. ниже).
+
+> **Примечание**: v1.0.0 на реальных устройствах падал с `mbtool.mp-module-filter: mod_start returned -4 (not found)` (пересекающиеся слоты `original`/`previous_core`, отклонённые `libmodlauncher.so`, ошибка скрывалась под кодом `-4`). v1.1.0 переписан под официальный SDK; присылайте результаты проверки на реальных устройствах.
 
 ---
 
@@ -52,11 +63,13 @@
 
 ## Основные причины проблем (подробности в [BUG_REPORT.md](BUG_REPORT.md))
 
-1. **Почему показывается 0 серверов**:
+1. **Почему показывается 0 серверов** (несколько наложившихся причин):
    - `builtin.multiplayer-master-server-fix` (`0x01995118` в `libmodlauncher.so`) отбрасывает все HTTP-запросы к `warbandmain.taleworlds.com/handlerservers.ashx?type=` без `chkserialandroid`, возвращая `""`.
+   - **Порядок запуска**: `builtin.custom-server` стартует примерно на 42 мс раньше `builtin.resource-overrides`, поэтому `Start in host version = true` не срабатывает (игра стартует в `1157`).
+   - **Штатный `apply_filter`** скрывает все серверы PC `1170`, пока движок работает в `1157`.
    - `C0031g.c()` тихо подменяет дефолтный мастер-сервер адресом `http://oreo922.cn` из `library.json` (всего 2 сервера).
-   - `ModDevice.httpsGet()` возвращает HTML-страницы ошибок HTTP 4xx/5xx как успешный ответ `byte[]` и не обрабатывает редиректы `http↔https`.
-   - Движок Tegra дописывает `&gametype=android` (~185 серверов вместо ~280+ PC-серверов) или `&gametype=androidonly` (0 байт), а `builtin.custom-server` по умолчанию ставит протокол `1157` (`1.158`) вместо `1170` (`1.174`).
+   - `ModDevice.httpsGet()` возвращает HTML-страницы ошибок HTTP 4xx/5xx как успешный `byte[]` и не обрабатывает редиректы `http<->https`.
+   - Движок Tegra дописывает `&gametype=android` (~156 серверов) или `&gametype=androidonly` (0 байт) вместо полного PC-списка.
 2. **Почему отсутствует «Фильтр по модулю»**:
    - Окно списка серверов написано на C++ (`Multiplayer_client_window` в `libMBExpMobile.so`). TaleWorlds вырезали 3-й флажок ПК-версии (`is_version_compatible_checkbox`, `ui_is_version_compatible`) в Tegra-порте, хотя его координаты (`x=0.03, y=0.046`) до сих пор лежат в `game_variables.txt` (строки 1301–1304), оставляя пустой промежуток между «Есть игроки» и «Без пароля».
 3. **Другие найденные ошибки лаунчера (описаны в `BUG_REPORT.md`)**:
@@ -68,30 +81,28 @@
 
 ---
 
-## Нативный мод: `native/mp-module-filter/`
+## Нативный мод: `native/mp-module-filter/` (v1.1.0)
 
-Реализация на чистом C11, восстанавливающая `is_version_compatible_checkbox` (`ui_is_version_compatible`) в штатных координатах ПК-версии (`x=0.03, y=0.046`) и фильтрующая строки серверов без учёта регистра по текущему модулю (с учётом главного флажка «Фильтр серверов» и совместимостью с `builtin.custom-server`):
+Clean-room мод на C++17 под официальный SDK `remixer-dec/MNBTool/modframework` (`mod_api.h`, `build-mod.sh`, автоматические ARM64-привязки через `generate-bindings.py`). Он восстанавливает `is_version_compatible_checkbox` (`ui_is_version_compatible`) в штатных координатах ПК-версии (`x=0.03, y=0.046`), фильтрует строки серверов без учёта регистра по текущему модулю (с учётом главного флажка «Фильтр серверов» и совместимостью с `builtin.custom-server`) и содержит описанные выше исправления списка серверов.
 
-- `native/mp-module-filter/mf_abi.h` — проверенные через `_Static_assert` структуры `modAbi: 1` и смещения/символы Warband.
-- `native/mp-module-filter/mod_etrel.c` — AArch64 `ET_REL` (`mod.arm64.o`), строго соблюдающий белый список символов `libmodlauncher.so`.
-- `native/mp-module-filter/mod_so.c` — вариант разделяемой библиотеки для ShadowHook (`libmp_module_filter.so`).
-- `native/mp-module-filter/manifest.json` — манифест мода M&BTool (`id: "mbtool.mp-module-filter"`, русская/английская локализации, настройка `default_enabled`).
-- **Доверие в мультиплеере (для апстрима)**: При размещении `mp-module-filter/{manifest.json,mod.arm64.o}` в `assets/mods/` официального APK мод автоматически получает статус доверенного (`AssetManager.list("mods")` -> `InstalledMod.bundled = true`) без каких-либо правок Java. Сторонние непроверенные моды при ручной установке вызывают предупреждение `multiplayer.untrusted-mods` до включения в официальный релиз/библиотеку.
+- `native/mp-module-filter/mod.cpp` — исходный код мода (`MF_MOD_START`, хуки `MF_HOOK_CHAIN`, возвращает реальные коды `mf_result_v1`).
+- `native/mp-module-filter/manifest.json` — `schemaVersion: 2`, `minLauncherVersion: "4.3"`, `modAbi: 1`, `gameBuilds: ["default"]`, русская/английская локализации, настройка `default_enabled`.
+- `native/mp-module-filter/Makefile` — тонкая обёртка над официальным `build-mod.sh`.
+- **Доверие в мультиплеере (для апстрима)**: При размещении папки мода в `assets/mods/` официального APK он автоматически получает статус доверенного (`AssetManager.list("mods")` -> `InstalledMod.bundled = true`) без правок Java. Сторонние непроверенные моды при ручной установке вызывают предупреждение `multiplayer.untrusted-mods` до включения в официальный релиз/библиотеку.
 
 ---
 
 ## Артефакты сборки GitHub Actions и локальная сборка
 
-[`.github/workflows/build.yml`](.github/workflows/build.yml) компилирует `native/mp-module-filter` через Android NDK (`aarch64-linux-android24-clang`), проверяет белый список символов (`make check-whitelist`), валидирует `manifest.json` и публикует артефакт **`mp-module-filter-arm64`** (а на тегах `v*` — релиз GitHub):
+[`.github/workflows/build.yml`](.github/workflows/build.yml) получает официальный SDK (`remixer-dec/MNBTool`, зафиксирован коммит релиза 4.3), собирает **оба** объекта `mod.armv7.o` и `mod.arm64.o` через `ANDROID_ABI=both ./modframework/build-mod.sh` (проверка правил загрузчика и флаги SafeStack включены), валидирует `manifest.json` и публикует артефакт **`mp-module-filter`** (а на тегах `v*` — релиз GitHub):
 
-- `mp-module-filter.zip` — пакет мода M&BTool (`mp-module-filter/manifest.json` + `mp-module-filter/mod.arm64.o`)
-- `mod.arm64.o` — объектный файл AArch64 `ET_REL` для `assets/mods/mp-module-filter/`
-- `libmp_module_filter.so` — вариант разделяемой библиотеки для ShadowHook
+- `mp-module-filter.zip` — пакет мода M&BTool (`manifest.json` в корне архива + `mod.arm64.o` + `mod.armv7.o` + `source/`)
+- `mod.arm64.o`, `mod.armv7.o` — перемещаемые объектные файлы
 - `SHA256SUMS.txt` — контрольные суммы SHA-256
 
 Локальная сборка с Android NDK:
 ```bash
-make -C native/mp-module-filter \
-  CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" \
-  all check-whitelist
+git clone --depth 1 https://github.com/remixer-dec/MNBTool.git
+export ANDROID_NDK_ROOT=/path/to/android-ndk
+make -C native/mp-module-filter MNBTOOL_SDK=$PWD/MNBTool/modframework package
 ```
